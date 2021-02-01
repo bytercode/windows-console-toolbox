@@ -122,6 +122,8 @@ int get_two_int_arguments(int *index, int argc, char **argv, unsigned base, int 
     return 0;
 }
 
+
+
 int main(int argc, char **argv)
 {
     if (argc == 1)
@@ -253,6 +255,7 @@ int main(int argc, char **argv)
                 fperror("Failed to enable console resizing with Windows System Error Code %lu\n", GetLastError());
                 return 1;
             }
+            ++i;
         }
         else if (!strcmp("setwindowpos", argv[i]))
         {
