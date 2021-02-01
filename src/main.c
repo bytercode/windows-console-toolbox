@@ -33,18 +33,18 @@ WINBOOL GetConsoleCursorPosition(HANDLE hConsoleOutput, PCOORD lpConsoleCursorPo
     return TRUE;
 }
 
-WINBOOL EnableConsoleResizing(HWND hConsoleWindow, WINBOOL bEnable)
+WINBOOL EnableWindowResizing(HWND hWnd, WINBOOL bEnable)
 {
-    LONG lConsoleWindowStyle = GetWindowLongPtrA(hConsoleWindow, GWL_STYLE);
-    if (lConsoleWindowStyle == 0)
+    LONG_PTR lWindowStyle = GetWindowLongPtrA(hWnd, GWL_STYLE);
+    if (lWindowStyle == 0)
         return FALSE;
 
     if (bEnable)
-        lConsoleWindowStyle = lConsoleWindowStyle | WS_SIZEBOX | WS_MAXIMIZEBOX;
+        lWindowStyle = lWindowStyle | WS_SIZEBOX | WS_MAXIMIZEBOX;
     else
-        lConsoleWindowStyle = lConsoleWindowStyle & ~WS_SIZEBOX & ~WS_MAXIMIZEBOX;
+        lWindowStyle = lWindowStyle & ~WS_SIZEBOX & ~WS_MAXIMIZEBOX;
 
-    if (SetWindowLongPtrA(hConsoleWindow, GWL_STYLE, lConsoleWindowStyle) == 0)
+    if (SetWindowLongPtrA(hWnd, GWL_STYLE, lWindowStyle) == 0)
         return FALSE;
 
     return TRUE;
@@ -69,6 +69,18 @@ WINBOOL ResizeWindow(HWND hWnd, int width, int height, WINBOOL bRepaint)
         return FALSE;
 
     if (!MoveWindow(hWnd, WindowRect.left, WindowRect.top, width, height, bRepaint))
+        return FALSE;
+
+    return TRUE;
+}
+
+WINBOOL SetWindowMaximized(HWND hWnd, WINBOOL bMaximized)
+{
+    LONG_PTR lWindowStyle = GetWindowLongPtrA(hWnd, GWL_STYLE);
+    if (lWindowStyle == 0)
+        return FALSE;
+
+    if (!SetWindowLongPtrA(hWnd, GWL_STYLE, bMaximized ? lWindowStyle | WS_MAXIMIZE : lWindowStyle & WS_MAXIMIZE))
         return FALSE;
 
     return TRUE;
@@ -140,7 +152,8 @@ typedef struct
         CMD_GETCURSORPOS,
         CMD_GETWINDOWPOS,
         CMD_GETWINDOWSIZE,
-        CMD_GETWINDOWSIZEPIXEL
+        CMD_GETWINDOWSIZEPIXEL,
+        CMD_ISWINDOWMAXIMIZED
     } command_id;
     union
     {
@@ -208,7 +221,7 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
             }
             break;
         case CMD_SETRESIZABLE:
-            if (!EnableConsoleResizing(hConsoleWindow, curcmdptr->argument.boolean))
+            if (!EnableWindowResizing(hConsoleWindow, curcmdptr->argument.boolean))
             {
                 if (pe)
                     fperror("error:%i:Failed to enable console resizing with Windows System Error Code %lu\n", curcmdptr->command_index, GetLastError());
@@ -290,7 +303,18 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
                     fperror("error:%i:Failed to get the window rect with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
                     return 2;
                 }
-                fprintinfo(curcmdptr->command_index, "The window size in pixels is (%ld, %ld)\n", Rect.bottom-Rect.top, Rect.right-Rect.left);
+                fprintinfo(curcmdptr->command_index, "The window size in pixels is (%ld, %ld)\n", Rect.right-Rect.left, Rect.bottom-Rect.top);
+            }
+            break;
+        case CMD_ISWINDOWMAXIMIZED:
+            {
+                LONG_PTR lConsoleWindowStyle;
+                if (!(lConsoleWindowStyle = GetWindowLongPtrA(hConsoleWindow, GWL_STYLE)))
+                {
+                    fperror("error:%i:Failed to get the window long ptr of the console with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+                    return 2;
+                }
+                fprintinfo(curcmdptr->command_index, "The window is %s\n", lConsoleWindowStyle & WS_MAXIMIZE ? "maximized" : "not maximized");
             }
             break;
         default:
@@ -334,6 +358,8 @@ int main(int argc, char **argv)
                "        Prints the window size in (column, rows)\n\n"
                "    getwindowsizepixel\n"
                "        Prints the window size in pixel\n\n"
+               "    iswindowmaximized\n"
+               "        Prints if the window is maximized or not\n\n"
                "Additional Information:\n"
                "    The error format will be like this:\n"
                "        error:[argument position]: [error] with [\"errno\" or \"Window System Error Code\"] [error code] [what the error means if its not a windows system error code]\n\n"
@@ -472,7 +498,7 @@ int main(int argc, char **argv)
             else
             {
                 if (print_argument_errors)
-                    printf("error:%i:Invalid boolean value \"%s\" on option setresizable", i, arg);
+                    printf("error:%i:Invalid boolean value \"%s\" on option \'setresizable\'", i, arg);
 
                 return 1;
             }
@@ -542,6 +568,32 @@ int main(int argc, char **argv)
             curcmd.argument.two_ints.y = y;
             curcmd.command_id = CMD_RESIZEWINDOWPIXEL;
         }
+        /*else if (!strcmp("setwindowmaximized", argv[i]))
+        {
+            if (argc-i-1 < 1)
+            {
+                printf("error:%i:Option \'setwindowmaximized\' needs 1 additional argument, but got %i\n", i, argc-i-1);
+                return 1;
+            }
+            const char *arg = argv[i+1];
+            if (alphabet_caseinsensitive_strcmp(arg, "true"))
+            {
+                curcmd.argument.boolean = 1;
+            }
+            else if (alphabet_caseinsensitive_strcmp(arg, "false"))
+            {
+                curcmd.argument.boolean = 0;
+            }
+            else
+            {
+                if (print_argument_errors)
+                    printf("error:%i:Invalid boolean value \"%s\" on option \'setwindowmaximized\'", i, arg);
+
+                return 1;
+            }
+            curcmd.command_id = CMD_SETWINDOWMAXIMIZED;
+            ++i;
+        }*/
         else if (!strcmp("getcursorpos", argv[i]))
         {
             curcmd.command_id = CMD_GETCURSORPOS;
@@ -557,6 +609,10 @@ int main(int argc, char **argv)
         else if (!strcmp("getwindowsizepixel", argv[i]))
         {
             curcmd.command_id = CMD_GETWINDOWSIZEPIXEL;
+        }
+        else if (!strcmp("iswindowmaximized", argv[i]))
+        {
+            curcmd.command_id = CMD_ISWINDOWMAXIMIZED;
         }
         else
         {
