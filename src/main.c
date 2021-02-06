@@ -4,6 +4,10 @@
 #include <windows.h>
 #include "cstvector.h"
 
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+
 #define fperror(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
 #define fprintinfo(index, fmt, ...) printf("info:%i:"fmt, index, ##__VA_ARGS__)
 
@@ -105,7 +109,7 @@ int get_two_long_arguments(int *index, int argc, char **argv, unsigned base, lon
         return 1;
     }
     char *x_str = argv[i+1];
-    char *y_str = argv[i+1];
+    char *y_str = argv[i+2];
     int xv = strtoll(x_str, &x_str, base), yv = strtoll(y_str, &y_str, base);
     if (*x_str != 0)
     {
@@ -146,6 +150,7 @@ typedef struct
         CMD_SETCURSORPOSITION,
         CMD_MOVECURSOR,
         CMD_SETRESIZABLE,
+        CMD_ENABLEVT100,
         CMD_SETWINDOWPOSITION,
         CMD_MOVEWINDOW,
         CMD_RESIZEWINDOWPIXEL,
@@ -173,12 +178,16 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
     HWND hConsoleWindow = GetConsoleWindow();
     if (hConsoleOutput == NULL)
     {
-        fperror("Failed to get the console screen buffer handle thing with Windows System Error Code %lu\n", GetLastError());
+        if (pe)
+            fperror("Failed to get the console screen buffer handle thing with Windows System Error Code %lu\n", GetLastError());
+
         return 2;
     }
     if (hConsoleWindow == NULL)
     {
-        fperror("Failed to get the console window handle with Windows System Error Code %lu\n", GetLastError());
+        if (pe)
+            fperror("Failed to get the console window handle with Windows System Error Code %lu\n", GetLastError());
+
         return 2;
     }
     command *curcmdptr;
@@ -186,7 +195,9 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
     {
         if ((curcmdptr = cstvector_getat(commandvec, i)) == NULL)
         {
-            fperror("error:command_%I64u:Failed to get index %I64u from the vector with errno %i (%s)\n", i, i, errno, strerror(errno));
+            if (pe)
+                fperror("error:command_%I64u:Failed to get index %I64u from the vector with errno %i (%s)\n", i, i, errno, strerror(errno));
+
             return 3;
         }
 
@@ -207,10 +218,11 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
                 if (!GetConsoleCursorPosition(hConsoleOutput, &console_cursor_position))
                 {
                     if (pe)
-                        printf("error:%i:Failed to get the console's cursor position on option \"movecursor\" with Windows System Error Code %lu\n", curcmdptr->command_index, GetLastError());
+                        fperror("error:%i:Failed to get the console's cursor position on option \"movecursor\" with Windows System Error Code %lu\n", curcmdptr->command_index, GetLastError());
 
                     return 2;
                 }
+                printf("%i %i\n", curcmdptr->argument.two_ints.y, console_cursor_position.Y + curcmdptr->argument.two_ints.y);
                 if (!SetConsoleCursorPosition(hConsoleOutput, CreateCoord(console_cursor_position.X + curcmdptr->argument.two_ints.x, console_cursor_position.Y + curcmdptr->argument.two_ints.y)))
                 {
                     if (pe)
@@ -234,14 +246,14 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
                 RECT WindowRect;
                 if (!GetWindowRect(hConsoleWindow, &WindowRect))
                 {
-                    if (pae)
+                    if (pe)
                         fperror("error:%i:Failed to get the console window rect with Windows System Error Code %lu\n", curcmdptr->command_index, GetLastError());
 
                     return 2;
                 }
                 if (!MoveWindow(hConsoleWindow, curcmdptr->argument.two_ints.x, curcmdptr->argument.two_ints.y, WindowRect.right-WindowRect.left+1, WindowRect.bottom-WindowRect.top+1, TRUE))
                 {
-                    if (pae)
+                    if (pe)
                         fperror("error:%i:Failed to set the window position to (%i, %i) with Windows System Error Code %lu\n", curcmdptr->command_index, curcmdptr->argument.two_ints.x, curcmdptr->argument.two_ints.y, GetLastError());
 
                     return 2;
@@ -251,14 +263,18 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
         case CMD_MOVEWINDOW:
             if (!ActuallyMoveWindow(hConsoleWindow, curcmdptr->argument.two_ints.x, curcmdptr->argument.two_ints.y, TRUE))
             {
-                fperror("error:%i:Failed to move the console window by (%i, %i) with Windows Error Code %lu\n", curcmdptr->command_index, curcmdptr->argument.two_ints.x, curcmdptr->argument.two_ints.y, GetLastError());
+                if (pe)
+                    fperror("error:%i:Failed to move the console window by (%i, %i) with Windows Error Code %lu\n", curcmdptr->command_index, curcmdptr->argument.two_ints.x, curcmdptr->argument.two_ints.y, GetLastError());
+
                 return 2;
             }
             break;
         case CMD_RESIZEWINDOWPIXEL:
             if (!ResizeWindow(hConsoleWindow, curcmdptr->argument.two_ints.x, curcmdptr->argument.two_ints.y, TRUE))
             {
-                fperror("error:%i:Failed to resize the console window to (%i, %i) with Windows Error Code %lu\n", curcmdptr->command_index, curcmdptr->argument.two_ints.x, curcmdptr->argument.two_ints.y, GetLastError());
+                if (pe)
+                    fperror("error:%i:Failed to resize the console window to (%i, %i) with Windows Error Code %lu\n", curcmdptr->command_index, curcmdptr->argument.two_ints.x, curcmdptr->argument.two_ints.y, GetLastError());
+
                 return 2;
             }
             break;
@@ -267,7 +283,9 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
                 CONSOLE_SCREEN_BUFFER_INFO csbi;
                 if (!GetConsoleScreenBufferInfo(hConsoleOutput, &csbi))
                 {
-                    fperror("error:%i:Failed to get the console screen buffer info with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+                    if (pe)
+                        fperror("error:%i:Failed to get the console screen buffer info with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+
                     return 2;
                 }
                 fprintinfo(curcmdptr->command_index, "The cursor position is (%i, %i)\n", csbi.dwCursorPosition.X, csbi.dwCursorPosition.Y);
@@ -278,7 +296,9 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
             RECT Rect;
                 if (!GetWindowRect(hConsoleWindow, &Rect))
                 {
-                    fperror("error:%i:Failed to get the window rect with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+                    if (pe)
+                        fperror("error:%i:Failed to get the window rect with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+
                     return 2;
                 }
                 fprintinfo(curcmdptr->command_index, "The window position is (%ld, %ld)\n", Rect.left, Rect.top);
@@ -289,7 +309,9 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
                 SMALL_RECT ConsoleWindow;
                 if (!GetConsoleWindowRect(hConsoleOutput, &ConsoleWindow))
                 {
-                    fperror("error:%i:Failed to get the console window size (in characters) with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+                    if (pe)
+                        fperror("error:%i:Failed to get the console window size (in characters) with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+
                     return 2;
                 }
                 fprintinfo(curcmdptr->command_index, "The window size is (%i, %i)\n", ConsoleWindow.Right-ConsoleWindow.Left+1, ConsoleWindow.Bottom-ConsoleWindow.Top+1);
@@ -300,7 +322,9 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
                 RECT Rect;
                 if (!GetWindowRect(hConsoleWindow, &Rect))
                 {
-                    fperror("error:%i:Failed to get the window rect with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+                    if (pe)
+                        fperror("error:%i:Failed to get the window rect with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+
                     return 2;
                 }
                 fprintinfo(curcmdptr->command_index, "The window size in pixels is (%ld, %ld)\n", Rect.right-Rect.left, Rect.bottom-Rect.top);
@@ -311,7 +335,9 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
                 LONG_PTR lConsoleWindowStyle;
                 if (!(lConsoleWindowStyle = GetWindowLongPtrA(hConsoleWindow, GWL_STYLE)))
                 {
-                    fperror("error:%i:Failed to get the window long ptr of the console with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+                    if (pe)
+                        fperror("error:%i:Failed to get the window long ptr of the console with Windows Error Code %lu\n", curcmdptr->command_index, GetLastError());
+
                     return 2;
                 }
                 fprintinfo(curcmdptr->command_index, "The window is %s\n", lConsoleWindowStyle & WS_MAXIMIZE ? "maximized" : "not maximized");
@@ -322,6 +348,17 @@ int execute_commands(cstvector_t *commandvec, int pe, int pae)
         }
     }
     return 0;
+}
+
+int strtobool(char *str, char *ye, char *no)
+{
+    if (alphabet_caseinsensitive_strcmp(str, ye))
+        return 1;
+
+    if (alphabet_caseinsensitive_strcmp(str, no))
+        return 0;
+
+    return -1;
 }
 
 int main(int argc, char **argv)
@@ -409,51 +446,45 @@ int main(int argc, char **argv)
                 }
                 base = temp_base;
             }
-            if (argv[i][1] == 'p' && argv[i][2] == 'e')
+            else if (argv[i][1] == 'p' && argv[i][2] == 'e')
             {
                 if (argc-i-1 < 1)
                 {
                     printf("Option \'-pe\' needs 1 additional argument, but got %i\n", argc-i-1);
                     return 1;
                 }
-                const char *arg = argv[i+1];
-                if (alphabet_caseinsensitive_strcmp(arg, "true"))
+                // The 'i' increment is in hereeee
+                if ((print_argument_errors = strtobool(argv[++i], "true", "false")) == -1)
                 {
-                    print_errors = 1;
-                }
-                else if (alphabet_caseinsensitive_strcmp(arg, "false"))
-                {
-                    print_errors = 0;
-                }
-                else
-                {
+                    if (print_argument_errors)
+                        printf("error:%i:Invalid boolean value \"%s\" on option \'pe\'\n", i, argv[i]);
+
                     return 1;
                 }
             }
-            if (argv[i][1] == 'p' && argv[i][2] == 'a' && argv[i][3] == 'e')
+            else if (argv[i][1] == 'p' && argv[i][2] == 'a' && argv[i][3] == 'e')
             {
                 if (argc-i-1 < 1)
                 {
                     printf("Option \'-pae\' needs 1 additional argument, but got %i\n", argc-i-1);
                     return 1;
                 }
-                const char *arg = argv[i+1];
-                if (alphabet_caseinsensitive_strcmp(arg, "true"))
+                if ((print_argument_errors = strtobool(argv[++i], "true", "false")) == -1)
                 {
-                    print_argument_errors = 1;
-                }
-                else if (alphabet_caseinsensitive_strcmp(arg, "false"))
-                {
-                    print_argument_errors = 0;
-                }
-                else
-                {
+                    if (print_argument_errors)
+                        printf("error:%i:Invalid boolean value \"%s\" on option \'pae\'\n", i, argv[i]);
+
                     return 1;
                 }
             }
+            else
+            {
+                printf("error:%i:Invalid changer option (or whatever) \"%s\"\n", i, argv[i]);
+                return 1;
+            }
             continue;
         }
-        else if (!strcmp("setcursorpos", argv[i]))
+        else if (!strcmp("setcursorposition", argv[i]))
         {
             int x, y;
             if (get_two_int_arguments(&i, argc, argv, base, &x, &y, print_argument_errors,
@@ -486,19 +517,10 @@ int main(int argc, char **argv)
                 printf("error:%i:Option \'setresizable\' needs 1 additional argument, but got %i\n", i, argc-i-1);
                 return 1;
             }
-            const char *arg = argv[i+1];
-            if (alphabet_caseinsensitive_strcmp(arg, "true"))
-            {
-                curcmd.argument.boolean = 1;
-            }
-            else if (alphabet_caseinsensitive_strcmp(arg, "false"))
-            {
-                curcmd.argument.boolean = 0;
-            }
-            else
+            if ((curcmd.argument.boolean = strtobool(argv[i+1], "true", "false")) == -1)
             {
                 if (print_argument_errors)
-                    printf("error:%i:Invalid boolean value \"%s\" on option \'setresizable\'", i, arg);
+                    printf("error:%i:Invalid boolean value \"%s\" on option \'setresizable\'\n", i, argv[i+1]);
 
                 return 1;
             }
